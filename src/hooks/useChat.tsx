@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import { toast } from 'sonner';
+import type { ChatSession } from '@/components/ChatSidebar';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -7,39 +8,122 @@ interface Message {
 }
 
 const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/chat`;
+const SESSIONS_KEY = 'bifoes-chat-sessions';
+
+function generateId() {
+  return Math.random().toString(36).substring(2, 9);
+}
+
+function generateTitle(message: string): string {
+  const cleaned = message.trim().slice(0, 40);
+  return cleaned.length < message.trim().length ? `${cleaned}...` : cleaned;
+}
+
+function loadSessions(): ChatSession[] {
+  try {
+    const stored = localStorage.getItem(SESSIONS_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      return parsed.map((s: ChatSession) => ({
+        ...s,
+        createdAt: new Date(s.createdAt),
+      }));
+    }
+  } catch {}
+  return [];
+}
+
+function saveSessions(sessions: ChatSession[]) {
+  localStorage.setItem(SESSIONS_KEY, JSON.stringify(sessions));
+}
 
 export function useChat() {
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [sessions, setSessions] = useState<ChatSession[]>(() => loadSessions());
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
-  const sendMessage = useCallback(async (input: string) => {
-    const userMessage: Message = { role: 'user', content: input };
-    setMessages((prev) => [...prev, userMessage]);
-    setIsLoading(true);
+  const activeSession = sessions.find((s) => s.id === activeSessionId);
+  const messages = activeSession?.messages || [];
 
+  const updateSessions = useCallback((updater: (prev: ChatSession[]) => ChatSession[]) => {
+    setSessions((prev) => {
+      const updated = updater(prev);
+      saveSessions(updated);
+      return updated;
+    });
+  }, []);
+
+  const createNewSession = useCallback(() => {
+    const newSession: ChatSession = {
+      id: generateId(),
+      title: 'Nova conversa',
+      createdAt: new Date(),
+      messages: [],
+    };
+    updateSessions((prev) => [newSession, ...prev]);
+    setActiveSessionId(newSession.id);
+    return newSession.id;
+  }, [updateSessions]);
+
+  const sendMessage = useCallback(async (input: string) => {
+    let sessionId = activeSessionId;
+    
+    // Create new session if none active
+    if (!sessionId) {
+      sessionId = createNewSession();
+    }
+
+    const userMessage: Message = { role: 'user', content: input };
+    
+    // Update session with user message
+    updateSessions((prev) =>
+      prev.map((s) => {
+        if (s.id !== sessionId) return s;
+        const isFirstMessage = s.messages.length === 0;
+        return {
+          ...s,
+          title: isFirstMessage ? generateTitle(input) : s.title,
+          messages: [...s.messages, userMessage],
+        };
+      })
+    );
+
+    setIsLoading(true);
     let assistantContent = '';
 
     const updateAssistant = (chunk: string) => {
       assistantContent += chunk;
-      setMessages((prev) => {
-        const last = prev[prev.length - 1];
-        if (last?.role === 'assistant') {
-          return prev.map((m, i) =>
-            i === prev.length - 1 ? { ...m, content: assistantContent } : m
-          );
-        }
-        return [...prev, { role: 'assistant', content: assistantContent }];
-      });
+      updateSessions((prev) =>
+        prev.map((s) => {
+          if (s.id !== sessionId) return s;
+          const last = s.messages[s.messages.length - 1];
+          if (last?.role === 'assistant') {
+            return {
+              ...s,
+              messages: s.messages.map((m, i) =>
+                i === s.messages.length - 1 ? { ...m, content: assistantContent } : m
+              ),
+            };
+          }
+          return {
+            ...s,
+            messages: [...s.messages, { role: 'assistant', content: assistantContent }],
+          };
+        })
+      );
     };
 
     try {
+      const currentSession = sessions.find((s) => s.id === sessionId);
+      const allMessages = [...(currentSession?.messages || []), userMessage];
+
       const resp = await fetch(CHAT_URL, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
         },
-        body: JSON.stringify({ messages: [...messages, userMessage] }),
+        body: JSON.stringify({ messages: allMessages }),
       });
 
       if (!resp.ok) {
@@ -114,11 +198,32 @@ export function useChat() {
     } finally {
       setIsLoading(false);
     }
-  }, [messages]);
+  }, [activeSessionId, sessions, createNewSession, updateSessions]);
 
-  const clearMessages = useCallback(() => {
-    setMessages([]);
+  const selectSession = useCallback((id: string) => {
+    setActiveSessionId(id);
   }, []);
 
-  return { messages, isLoading, sendMessage, clearMessages };
+  const deleteSession = useCallback((id: string) => {
+    updateSessions((prev) => prev.filter((s) => s.id !== id));
+    if (activeSessionId === id) {
+      setActiveSessionId(null);
+    }
+  }, [activeSessionId, updateSessions]);
+
+  const clearActiveSession = useCallback(() => {
+    setActiveSessionId(null);
+  }, []);
+
+  return {
+    messages,
+    sessions,
+    activeSessionId,
+    isLoading,
+    sendMessage,
+    createNewSession,
+    selectSession,
+    deleteSession,
+    clearActiveSession,
+  };
 }

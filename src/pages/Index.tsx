@@ -5,6 +5,7 @@ import { ChatInput } from '@/components/ChatInput';
 import { WelcomeScreen } from '@/components/WelcomeScreen';
 import { TermsModal } from '@/components/TermsModal';
 import { SnowEffect } from '@/components/SnowEffect';
+import { ChatSidebar } from '@/components/ChatSidebar';
 import { useChat } from '@/hooks/useChat';
 import { ScrollArea } from '@/components/ui/scroll-area';
 
@@ -13,8 +14,20 @@ const TERMS_KEY = 'bifoes-terms-accepted';
 export default function Index() {
   const [termsAccepted, setTermsAccepted] = useState<boolean | null>(null);
   const [showTerms, setShowTerms] = useState(false);
-  const { messages, isLoading, sendMessage, clearMessages } = useChat();
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  const {
+    messages,
+    sessions,
+    activeSessionId,
+    isLoading,
+    sendMessage,
+    createNewSession,
+    selectSession,
+    deleteSession,
+    clearActiveSession,
+  } = useChat();
 
   useEffect(() => {
     const accepted = localStorage.getItem(TERMS_KEY) === 'true';
@@ -41,7 +54,13 @@ export default function Index() {
   };
 
   const handleNewChat = () => {
-    clearMessages();
+    clearActiveSession();
+    setSidebarOpen(false);
+  };
+
+  const handleSelectSession = (id: string) => {
+    selectSession(id);
+    setSidebarOpen(false);
   };
 
   const handleSend = (message: string) => {
@@ -65,14 +84,27 @@ export default function Index() {
         onCancel={handleCancelTerms}
       />
       
-      <Header onNewChat={handleNewChat} />
+      <ChatSidebar
+        isOpen={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
+        sessions={sessions}
+        activeSessionId={activeSessionId}
+        onSelectSession={handleSelectSession}
+        onNewChat={handleNewChat}
+        onDeleteSession={deleteSession}
+      />
+      
+      <Header 
+        onMenuClick={() => setSidebarOpen(!sidebarOpen)} 
+        onNewChat={handleNewChat}
+      />
       
       <main className="flex-1 flex flex-col container max-w-4xl mx-auto">
         {messages.length === 0 ? (
           <WelcomeScreen onSuggestionClick={handleSend} />
         ) : (
           <ScrollArea ref={scrollRef} className="flex-1 px-4">
-            <div className="py-4">
+            <div className="py-4 pb-12">
               {messages.map((message, index) => (
                 <ChatMessage
                   key={index}
